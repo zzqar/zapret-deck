@@ -34,4 +34,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: out/zapret-deck.zip
-          generate_release_notes: true
+          body_path: INSTALL.md

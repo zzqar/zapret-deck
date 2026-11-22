@@ -32,10 +32,10 @@ passwd
 
 ### Вариант А: из ZIP (проще)
 
-1. В Desktop Mode скачайте `zapret-deck.zip` со страницы **Releases** репозитория на GitHub.
+1. В Desktop Mode скачайте `zapret-deck.zip` со страницы <https://github.com/zzqar/zapret-deck/releases/latest>.
 2. В игровом режиме: `...` → Decky → ⚙️ → **Developer** → **Install Plugin from ZIP File** → выберите файл из `~/Downloads`.
 
-Вместо файла можно вставить прямую ссылку на `zapret-deck.zip` в поле **Install Plugin from URL**.
+Вместо файла можно вставить ссылку `https://github.com/zzqar/zapret-deck/releases/latest/download/zapret-deck.zip` в поле **Install Plugin from URL**.
 
 ### Вариант Б: с компьютера по SSH (для разработки)
 
