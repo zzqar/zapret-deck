@@ -34,7 +34,7 @@ NFQWS = os.path.join(BIN_DIR, "nfqws")
 # привилегии, а /home/deck закрыт для чужих пользователей.
 RUN_DIR = "/run/zapret-deck"
 LOG_FILE = os.path.join(decky.DECKY_PLUGIN_LOG_DIR, "nfqws.log")
-SETTINGS_FILE = os.path.join(decky.DECKY_SETTINGS_DIR, "settings.json")
+SETTINGS_FILE = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
 
 QNUM = 200
 MARK = "0x40000000"
@@ -387,6 +387,7 @@ class ZapretDeck:
         pretty = " ".join(shlex.quote(c) for c in cmd)
         decky.logger.info("Запуск: " + pretty)
 
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
         self.log_fh = open(LOG_FILE, "w")
         self.log_fh.write(f"$ {pretty}\n")
         self.log_fh.flush()
@@ -744,9 +745,9 @@ class ZapretDeck:
         shutil.rmtree(RUN_DIR, ignore_errors=True)
 
 
-# Decky в зависимости от версии вызывает методы либо на экземпляре, либо на
-# самом классе (self = Plugin). Чтобы не зависеть от этого, вся логика живёт в
-# одном экземпляре ZapretDeck, а Plugin только пересылает вызовы.
+# При api_version 1 Decky создаёт экземпляр Plugin(), при api_version 0 вызывает
+# методы на классе. Логика живёт в одном экземпляре ZapretDeck, а Plugin только
+# пересылает вызовы, поэтому работают оба варианта.
 _impl = ZapretDeck()
 
 
