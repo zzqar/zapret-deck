@@ -37,3 +37,32 @@ jobs:
         with:
           files: out/zapret-deck.zip
           body_path: INSTALL.md
+      - name: Prepare Pages
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p site
+          cp out/zapret-deck.zip site/z.zip
+          cat > site/index.html <<HTML
+          <!doctype html><meta charset="utf-8"><title>Zapret Deck</title>
+          <p>Zapret Deck ${GITHUB_REF_NAME}. Decky → Developer → Install Plugin from URL:</p>
+          <pre>https://zzqar.github.io/zapret-deck/z.zip</pre>
+          <p><a href="https://github.com/zzqar/zapret-deck">github.com/zzqar/zapret-deck</a></p>
+          HTML
+      - uses: actions/upload-pages-artifact@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          path: site
+
+  pages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -13,7 +13,7 @@
 4. **Режим разработчика.** В игровом режиме: `...` → Decky → ⚙️ → включи **Developer mode**.
 5. **Плагин.** `...` → Decky → ⚙️ → **Developer** → **Install Plugin from URL**, вставь ссылку:
    ```
-   https://github.com/zzqar/zapret-deck/releases/latest/download/zapret-deck.zip
+   https://zzqar.github.io/zapret-deck/z.zip
    ```
 6. **Запуск.** `...` → **Zapret Deck** → **«Скачать nfqws»** → включи **«Защищённый DNS»** и **«Включить»**.
 7. **Проверка.** **«Проверить Steam»**: всё должно быть ✅. Перезапусти Steam.
