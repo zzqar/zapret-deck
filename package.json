@@ -1,6 +1,6 @@
 {
   "name": "zapret-deck",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Decky Loader plugin: zapret/nfqws DPI bypass with switchable strategies",
   "type": "module",
   "scripts": {
