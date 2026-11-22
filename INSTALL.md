@@ -30,14 +30,22 @@ passwd
 
 ## 5. Установите плагин
 
-### Вариант А: из ZIP (проще)
+### Вариант А: по ссылке (проще)
+
+`...` → Decky → ⚙️ → **Developer** → **Install Plugin from URL**, вставьте:
+
+```
+https://zzqar.github.io/zapret-deck/z.zip
+```
+
+Ссылка всегда ведёт на последнюю версию. Чтобы обновить плагин, повторите этот шаг.
+
+### Вариант Б: из файла
 
 1. В Desktop Mode скачайте `zapret-deck.zip` со страницы <https://github.com/zzqar/zapret-deck/releases/latest>.
 2. В игровом режиме: `...` → Decky → ⚙️ → **Developer** → **Install Plugin from ZIP File** → выберите файл из `~/Downloads`.
 
-Вместо файла можно вставить ссылку `https://zzqar.github.io/zapret-deck/z.zip` в поле **Install Plugin from URL**.
-
-### Вариант Б: с компьютера по SSH (для разработки)
+### Вариант В: с компьютера по SSH (для разработки)
 
 На Deck в Konsole:
 
