@@ -1,0 +1,11 @@
+{
+  "name": "Zapret Deck",
+  "author": "Виктор Ложков",
+  "flags": ["root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["network", "dpi", "root"],
+    "description": "Обход DPI через zapret (nfqws) с переключением стратегий из Quick Access.",
+    "image": ""
+  }
+}

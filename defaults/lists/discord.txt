@@ -1,0 +1,13 @@
+# Домены Discord
+discord.com
+discord.gg
+discord.gift
+discord.media
+discord.new
+discord.dev
+discordapp.com
+discordapp.net
+discordcdn.com
+discordstatus.com
+discord-attachments-uploads-prd.storage.googleapis.com
+dis.gd
