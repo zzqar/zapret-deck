@@ -1,72 +1,70 @@
 # Zapret Deck
 
-Плагин для [Decky Loader](https://decky.xyz) на Steam Deck: обход блокировок Steam, Roblox и Telegram во Вьетнаме из меню Quick Access (`...`), без VPN. Скорость загрузок и пинг не меняются, трафик идёт напрямую.
+Плагин [Decky Loader](https://decky.xyz) для Steam Deck. Обходит блокировки Steam, Roblox и Telegram во Вьетнаме без VPN. Включается одним тумблером в меню `...`.
 
-**Как установить:** [INSTALL.md](INSTALL.md)
+- **Обход DPI**: `nfqws` мешает провайдеру прочитать имя сайта.
+- **Защищённый DNS**: DNS-over-TLS к 1.1.1.1 / 8.8.8.8, чтобы провайдер не подменял адреса на 127.0.0.1.
 
-Провайдер блокирует двумя способами, плагин закрывает оба:
+## Установка
 
-| Блокировка | Решение в плагине |
+1. **Desktop Mode.** `Steam` → **Питание** → **Переключиться на рабочий стол**.
+2. **Пароль.** В Konsole выполни `passwd`, если пароль ещё не задан.
+3. **Decky Loader.** Скачай `decky_installer.desktop` с <https://decky.xyz>, запусти его и выбери **Release**.
+4. **Режим разработчика.** В игровом режиме: `...` → Decky → ⚙️ → включи **Developer mode**.
+5. **Плагин.** `...` → Decky → ⚙️ → **Developer** → **Install Plugin from URL**, вставь ссылку:
+   ```
+   https://github.com/zzqar/zapret-deck/releases/latest/download/zapret-deck.zip
+   ```
+6. **Запуск.** `...` → **Zapret Deck** → **«Скачать nfqws»** → включи **«Защищённый DNS»** и **«Включить»**.
+7. **Проверка.** **«Проверить Steam»**: всё должно быть ✅. Перезапусти Steam.
+
+Обновление: повтори шаг 5. Подробности и решение проблем: [INSTALL.md](INSTALL.md).
+
+## Если не работает
+
+- **`DNS подменён → 127.x`**: проверь, что «Защищённый DNS» включён, переподключи Wi-Fi.
+- **❌ при нормальном IP**: выбери другую стратегию `VN · …`.
+- **Не открывается конкретный сайт**: допиши домен в `~/zapret-deck/lists/vietnam.txt` или обнови страницу 2–3 раза, и он попадёт в автосписок.
+- **Сайт стал работать хуже**: добавь домен в `~/zapret-deck/lists/exclude.txt`.
+
+## Настройка
+
+Файлы в `~/zapret-deck/`, редактируются без sudo. После правки нажми «Перезапустить nfqws».
+
+| Путь | Что это |
 |---|---|
-| DNS отдаёт 127.0.0.1 или глушит запросы | **Защищённый DNS**: локальный DNS-over-TLS резолвер на `127.0.0.77`, дальше к 1.1.1.1 / 8.8.8.8 |
-| DPI читает SNI и рвёт HTTPS («ошибка 101») | **Обход DPI**: `nfqws` режет и переставляет пакеты, чтобы DPI не мог прочитать имя сайта |
+| `strategies/*.conf` | стратегии |
+| `lists/vietnam.txt` | Steam, Roblox, Telegram |
+| `lists/steam.txt`, `lists/discord.txt` | дополнительные списки |
+| `lists/exclude.txt` | домены, которые не трогаются |
+| `lists/autohostlist.txt` | домены, найденные автоматически |
 
-## Как это работает
-
-- Backend (`main.py`) работает от root.
-- `nfqws --qnum=200` запускается с выбранной стратегией. nftables (таблица `inet zapret_deck`) отправляет в очередь первые исходящие пакеты на 80/443, а для автосписка ещё и первые входящие. Если nft нет, используется iptables.
-- Защищённый DNS (`py_modules/dns_proxy.py`) переключает DNS активных Wi-Fi и Ethernet подключений через `nmcli device modify`. Профили сетей не меняются: если выключить DNS или выгрузить плагин, `nmcli device reapply` вернёт всё как было. Раз в 20 секунд плагин проверяет, не слетела ли настройка после смены сети.
-- В правилах стоит `bypass`: если nfqws упадёт, трафик пойдёт напрямую и сеть не пропадёт.
-
-## Стратегии
-
-По умолчанию выбрана **Vietnam FPT (рабочая)**, подобранная под FPT Telecom: `multidisorder 1,midsld` для TCP, QUIC fake и автосписок с порогом 2. Стратегии `VN · …` — альтернативы для TCP, их стоит перебрать на Viettel и VNPT или если DPI обновился.
-
-## Файлы
-
-Всё лежит в `/home/deck/zapret-deck/` и редактируется без sudo. После правки нажмите «Перезапустить nfqws».
-
-```
-strategies/*.conf       стратегии
-lists/vietnam.txt       Steam, Roblox, Telegram (тумблер в UI)
-lists/steam.txt         расширенный список Steam (CDN, чат, трансляции)
-lists/discord.txt       Discord
-lists/exclude.txt       никогда не обходятся (банки, gov.vn)
-lists/autohostlist.txt  найдено автоматически (после 2 неудач домен добавляется сам)
-bin/nfqws, fake/        бинарник и fake-пакеты
-```
-
-## Формат стратегии
+Пример стратегии:
 
 ```
 # name: Моя стратегия
-# description: что делает
 # tcp: 80,443
 # udp: 443
---filter-tcp=80,443 {hostlist} {exclude} {autohostlist} --hostlist-auto-fail-threshold=2
+--filter-tcp=80,443 {hostlist} {exclude} {autohostlist}
 --dpi-desync=multidisorder --dpi-desync-split-pos=1,midsld
---new
---filter-udp=443 {hostlist} {exclude} --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic={fake_quic}
 ```
 
-Плейсхолдеры:
-- `{hostlist}` — `--hostlist=` для каждого включённого списка.
-- `{exclude}` — `exclude.txt`.
-- `{autohostlist}` — автосписок. Если он есть в стратегии, включается перехват входящих пакетов.
-- `{fake_tls}`, `{fake_quic}` — fake-файлы.
-
-`# tcp:` и `# udp:` задают порты, которые перехватываются firewall'ом. Аргументы `--dpi-desync…` совпадают с Windows-версией nfqws, достаточно заменить пути на плейсхолдеры.
+Плейсхолдеры: `{hostlist}`, `{exclude}`, `{autohostlist}`, `{fake_tls}`, `{fake_quic}`.
 
 ## Разработка
 
 ```bash
-pnpm install
-pnpm build                       # dist/index.js
-./deploy.sh deck@steamdeck.local # сборка + установка на Deck по SSH
+pnpm install && pnpm build
+python3 tests/smoke.py
+./deploy.sh deck@steamdeck.local
 ```
 
-Релиз: `git tag v0.1.0 && git push --tags`. Workflow соберёт `zapret-deck.zip` и приложит его к GitHub Release.
+Релиз: `git tag vX.Y.Z && git push --tags`.
+
+## Связь
+
+Telegram: [@zzqar](https://t.me/zzqar)
 
 ## Лицензия
 
-MIT, см. [LICENSE](LICENSE).
+MIT

@@ -93,3 +93,7 @@ nmcli -g IP4.DNS device show wlan0
 ```bash
 rm -rf ~/zapret-deck
 ```
+
+## Связь
+
+Telegram: [@zzqar](https://t.me/zzqar)
