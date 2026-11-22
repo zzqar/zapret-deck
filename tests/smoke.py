@@ -68,6 +68,15 @@ async def run():
     assert st["strategy"] == "vn-01.conf"
     print("get_state (класс): ok")
     assert os.path.isfile(main.SETTINGS_FILE), "настройки не сохранились"
+    # подменённый nfqws не должен запускаться
+    os.makedirs(main.ROOT_BIN_DIR, exist_ok=True)
+    with open(main.NFQWS, "wb") as f:
+        f.write(b"not nfqws")
+    try:
+        main._impl._verify_nfqws()
+        raise AssertionError("подменённый nfqws прошёл проверку")
+    except RuntimeError as e:
+        print(f"подмена nfqws обнаружена: {e}")
     print("OK")
 
 

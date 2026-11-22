@@ -7,6 +7,7 @@ DNS-over-TLS резолвер: во Вьетнаме провайдер подм
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import pwd
@@ -26,9 +27,11 @@ import dns_proxy  # noqa: E402
 DATA_DIR = os.path.join(decky.DECKY_USER_HOME, "zapret-deck")
 STRAT_DIR = os.path.join(DATA_DIR, "strategies")
 LISTS_DIR = os.path.join(DATA_DIR, "lists")
-BIN_DIR = os.path.join(DATA_DIR, "bin")
 FAKE_DIR = os.path.join(DATA_DIR, "fake")
-NFQWS = os.path.join(BIN_DIR, "nfqws")
+# Бинарник запускается от root, поэтому лежит в папке Decky, принадлежащей root,
+# а не в ~/zapret-deck, куда может писать любой процесс пользователя deck.
+ROOT_BIN_DIR = os.path.join(decky.DECKY_PLUGIN_RUNTIME_DIR, "bin")
+NFQWS = os.path.join(ROOT_BIN_DIR, "nfqws")
 
 # Рабочая копия списков и fake-файлов: nfqws по умолчанию сбрасывает
 # привилегии, а /home/deck закрыт для чужих пользователей.
@@ -40,9 +43,15 @@ QNUM = 200
 MARK = "0x40000000"
 NFT_TABLE = "zapret_deck"
 IPT_CHAIN = "ZAPRET_DECK"
-# Откуда скачивать nfqws: GitHub API последнего релиза (можно переопределить
-# ключом "release_api" в settings.json)
-RELEASE_API = "https://api.github.com/repos/bol-van/zapret/releases/latest"
+# nfqws закреплён на конкретной версии. Архив и сам бинарник сверяются с SHA-256:
+# подменённый релиз или файл на диске не будут запущены.
+NFQWS_VERSION = "v72.13"
+NFQWS_URL = (
+    f"https://github.com/bol-van/zapret/releases/download/{NFQWS_VERSION}/zapret-{NFQWS_VERSION}.tar.gz"
+)
+NFQWS_ARCHIVE_SHA256 = "25c74e6c5f48963fa244c2955e76694a07c39447245a0457e2efdc74b3317e68"
+NFQWS_BIN_SHA256 = "f34615964d7321650197cd69d3f7cbfdaabe8118b5a0d57c6e41dccdff658999"
+NFQWS_MEMBER = f"zapret-{NFQWS_VERSION}/binaries/linux-x86_64/nfqws"
 
 EXCLUDE_LIST = "exclude.txt"
 AUTO_LIST = "autohostlist.txt"
@@ -110,6 +119,14 @@ def tail(path: str, lines: int = 30) -> str:
             return "".join(f.readlines()[-lines:])
     except OSError:
         return ""
+
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def count_domains(path: str) -> int:
@@ -189,7 +206,8 @@ class ZapretDeck:
                 target = os.path.join(dst, name)
                 if not os.path.exists(target):
                     shutil.copy2(os.path.join(src, name), target)
-        os.makedirs(BIN_DIR, exist_ok=True)
+        # nfqws из старых версий лежал в ~/zapret-deck/bin, теперь он в папке root
+        shutil.rmtree(os.path.join(DATA_DIR, "bin"), ignore_errors=True)
         auto = os.path.join(LISTS_DIR, AUTO_LIST)
         if not os.path.exists(auto):
             open(auto, "w").close()
@@ -218,10 +236,18 @@ class ZapretDeck:
         ]
 
     def _nfqws_path(self):
-        for path in (NFQWS, os.path.join(PLUGIN_DIR, "bin", "nfqws")):
-            if os.path.isfile(path) and os.access(path, os.X_OK):
-                return path
-        return None
+        return NFQWS if os.path.isfile(NFQWS) else None
+
+    def _verify_nfqws(self):
+        """Сверяет бинарник с закреплённым хешем перед каждым запуском."""
+        st = os.stat(NFQWS)
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            raise RuntimeError("nfqws доступен на запись не только root — переустановите nfqws")
+        actual = sha256_file(NFQWS)
+        if actual != NFQWS_BIN_SHA256:
+            raise RuntimeError(
+                f"SHA-256 nfqws не совпадает ({actual[:12]}…), запуск отменён. Переустановите nfqws"
+            )
 
     # ---------- firewall ----------
 
@@ -374,6 +400,7 @@ class ZapretDeck:
         nfqws = self._nfqws_path()
         if not nfqws:
             raise RuntimeError("nfqws не установлен — нажмите «Скачать nfqws»")
+        await asyncio.to_thread(self._verify_nfqws)
         strategies = {s["id"]: s for s in self._strategies()}
         strategy = strategies.get(self.settings["strategy"])
         if strategy is None:
@@ -640,47 +667,35 @@ class ZapretDeck:
             return {"ok": False, "url": url, "error": str(e)}
 
     async def install_nfqws(self):
-        """Скачивает последний релиз nfqws и достаёт из архива
-        nfqws для x86_64 и fake-файлы."""
+        """Скачивает закреплённую версию, сверяет SHA-256 архива и бинарника
+        и ставит nfqws в папку root. Fake-файлы уже входят в плагин."""
         def _install():
-            api = run(
-                ["curl", "-fsSL", "--max-time", "20",
-                 self.settings.get("release_api", RELEASE_API)],
-                timeout=30, check=True,
-            )
-            release = json.loads(api.stdout)
-            asset = next(
-                (a for a in release.get("assets", [])
-                 if re.match(r"^zapret-v[\d.]+\.tar\.gz$", a["name"])),
-                None,
-            )
-            if asset is None:
-                raise RuntimeError("В релизе не найден архив zapret-vX.tar.gz")
-            archive = os.path.join(DATA_DIR, "zapret-release.tar.gz")
-            run(["curl", "-fsSL", "--max-time", "180", "-o", archive, asset["browser_download_url"]],
-                timeout=200, check=True)
-            found_bin = False
+            os.makedirs(ROOT_BIN_DIR, mode=0o755, exist_ok=True)
+            os.chown(ROOT_BIN_DIR, 0, 0)
+            os.chmod(ROOT_BIN_DIR, 0o755)
+            archive = os.path.join(ROOT_BIN_DIR, "download.tar.gz")
             try:
+                run(["curl", "-fsSL", "--max-time", "180", "-o", archive, NFQWS_URL],
+                    timeout=200, check=True)
+                actual = sha256_file(archive)
+                if actual != NFQWS_ARCHIVE_SHA256:
+                    raise RuntimeError(
+                        f"SHA-256 архива не совпадает ({actual[:12]}…): файл подменён или повреждён"
+                    )
                 with tarfile.open(archive, "r:gz") as tar:
-                    for m in tar.getmembers():
-                        if not m.isfile():
-                            continue
-                        if re.search(r"/binaries/(linux-)?x86_64/nfqws$", m.name):
-                            tmp = NFQWS + ".new"
-                            with open(tmp, "wb") as f:
-                                f.write(tar.extractfile(m).read())
-                            os.chmod(tmp, 0o755)
-                            os.replace(tmp, NFQWS)
-                            found_bin = True
-                        elif re.search(r"/files/fake/[^/]+\.bin$", m.name):
-                            with open(os.path.join(FAKE_DIR, os.path.basename(m.name)), "wb") as f:
-                                f.write(tar.extractfile(m).read())
+                    data = tar.extractfile(tar.getmember(NFQWS_MEMBER)).read()
             finally:
-                os.remove(archive)
-            if not found_bin:
-                raise RuntimeError("В архиве не найден binaries/linux-x86_64/nfqws")
-            chown_user(DATA_DIR)
-            return {"ok": True, "version": release.get("tag_name", "?")}
+                if os.path.exists(archive):
+                    os.remove(archive)
+            if hashlib.sha256(data).hexdigest() != NFQWS_BIN_SHA256:
+                raise RuntimeError("SHA-256 nfqws в архиве не совпадает")
+            tmp = NFQWS + ".new"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.chown(tmp, 0, 0)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, NFQWS)
+            return {"ok": True, "version": NFQWS_VERSION}
         try:
             return await asyncio.to_thread(_install)
         except Exception as e:

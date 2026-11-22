@@ -305,7 +305,7 @@ function Content() {
         {state.nfqws_installed && (
           <PanelSectionRow>
             <ButtonItem layout="below" disabled={busy || state.enabled} onClick={() => act(installNfqws)}>
-              Обновить nfqws
+              Переустановить nfqws
             </ButtonItem>
           </PanelSectionRow>
         )}
