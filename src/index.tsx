@@ -66,17 +66,36 @@ const preStyle = {
   margin: 0,
 };
 
+// Последнее известное состояние: при повторном открытии панель рисуется сразу
+let cachedState: State | null = null;
+
+const withTimeout = <T,>(p: Promise<T>, ms: number) =>
+  Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`backend не ответил за ${ms / 1000} с`)), ms),
+    ),
+  ]);
+
 function Content() {
-  const [state, setState] = useState<State | null>(null);
+  const [state, setStateRaw] = useState<State | null>(cachedState);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [checks, setChecks] = useState<CheckResult[]>([]);
   const [log, setLog] = useState<string | null>(null);
 
+  const setState = (s: State) => {
+    cachedState = s;
+    setStateRaw(s);
+  };
+
   const refresh = useCallback(async () => {
     try {
-      setState(await getState());
+      setState(await withTimeout(getState(), 5000));
+      setLoadError(null);
     } catch (e) {
-      console.error(e);
+      console.error("Zapret Deck:", e);
+      setLoadError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -109,7 +128,26 @@ function Content() {
   if (!state) {
     return (
       <PanelSection>
-        <PanelSectionRow>Загрузка…</PanelSectionRow>
+        {loadError ? (
+          <>
+            <PanelSectionRow>
+              <Field label="Backend плагина не отвечает" bottomSeparator="none" />
+              <pre style={{ ...preStyle, color: "#ff8080" }}>{loadError}</pre>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ fontSize: "11px", opacity: 0.7 }}>
+                Лог: ~/homebrew/logs/zapret-deck/ и journalctl -u plugin_loader
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={refresh}>
+                Повторить
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        ) : (
+          <PanelSectionRow>Загрузка…</PanelSectionRow>
+        )}
       </PanelSection>
     );
   }
@@ -129,7 +167,10 @@ function Content() {
             description={status}
             checked={state.enabled}
             disabled={busy || !state.nfqws_installed}
-            onChange={(v) => act(() => setEnabled(v))}
+            onChange={(v) => {
+              setState({ ...state, enabled: v });
+              act(() => setEnabled(v));
+            }}
           />
         </PanelSectionRow>
 
@@ -145,7 +186,10 @@ function Content() {
             }
             checked={state.dns}
             disabled={busy}
-            onChange={(v) => act(() => setDns(v))}
+            onChange={(v) => {
+              setState({ ...state, dns: v });
+              act(() => setDns(v));
+            }}
           />
         </PanelSectionRow>
 

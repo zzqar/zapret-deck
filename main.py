@@ -148,7 +148,7 @@ def parse_strategy(path: str) -> dict:
     return meta
 
 
-class Plugin:
+class ZapretDeck:
     proc = None
     log_fh = None
     fw_backend = None
@@ -158,6 +158,8 @@ class Plugin:
     settings = None
     dns = None
     dns_task = None
+    modprobed = False
+    init_error = ""
 
     # ---------- настройки и файлы ----------
 
@@ -232,8 +234,8 @@ class Plugin:
 
     def _fw_apply(self, tcp: str, udp: str, incoming: bool):
         """incoming=True дополнительно отправляет в очередь первые входящие
-        TCP-пакеты. Без них autohostlist не видит RST и редиректы от DPI."""
-        self._fw_remove()
+        TCP-пакеты. Без них autohostlist не видит RST и редиректы от DPI.
+        Старые правила к этому моменту уже удалены в _stop()."""
         backend = self._detect_fw()
         if backend is None:
             raise RuntimeError("Не найден ни nft, ни iptables")
@@ -291,10 +293,14 @@ class Plugin:
         self.fw_backend = backend
 
     def _fw_remove(self):
+        """Чистит только то, что реально есть: на SteamOS это обычно одна
+        таблица nft, а не 16 вызовов iptables."""
         if which("nft"):
             run(["nft", "delete", "table", "inet", NFT_TABLE])
         for ipt in ("iptables", "ip6tables"):
             if not which(ipt):
+                continue
+            if run([ipt, "-t", "mangle", "-n", "-L", IPT_CHAIN]).returncode != 0:
                 continue
             for hook, chain in (("POSTROUTING", IPT_CHAIN), ("PREROUTING", IPT_CHAIN + "_IN")):
                 for _ in range(10):
@@ -373,7 +379,9 @@ class Plugin:
         if strategy is None:
             raise RuntimeError(f"Стратегия {self.settings['strategy']} не найдена")
 
-        run(["modprobe", "nfnetlink_queue"])
+        if not self.modprobed:
+            await asyncio.to_thread(run, ["modprobe", "nfnetlink_queue"])
+            self.modprobed = True
         lists = self._stage_runtime()
         cmd = [nfqws, f"--qnum={QNUM}", f"--dpi-desync-fwmark={MARK}", *self._build_args(strategy, lists)]
         pretty = " ".join(shlex.quote(c) for c in cmd)
@@ -385,20 +393,26 @@ class Plugin:
         self.proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=self.log_fh, stderr=subprocess.STDOUT, env=clean_env()
         )
-        await asyncio.sleep(1.5)
-        if not self._is_running():
-            log = tail(LOG_FILE, 15)
-            await self._stop()
-            raise RuntimeError(f"nfqws завершился сразу после запуска:\n{log}")
         try:
-            self._fw_apply(strategy["tcp"], strategy["udp"], "{autohostlist}" in strategy["args"])
+            # Правила ставим сразу: из-за bypass трафик не пострадает, даже если nfqws не поднимется
+            await asyncio.to_thread(
+                self._fw_apply, strategy["tcp"], strategy["udp"], "{autohostlist}" in strategy["args"]
+            )
         except Exception:
             await self._stop()
             raise
+        # Неверные аргументы nfqws отвергает за миллисекунды, долго ждать не нужно
+        try:
+            await asyncio.wait_for(asyncio.shield(self.proc.wait()), 0.4)
+        except asyncio.TimeoutError:
+            return
+        log = tail(LOG_FILE, 15)
+        await self._stop()
+        raise RuntimeError(f"nfqws завершился сразу после запуска:\n{log}")
 
     async def _stop(self):
         try:
-            self._fw_remove()
+            await asyncio.to_thread(self._fw_remove)
         except Exception as e:
             decky.logger.warning(f"Очистка firewall: {e}")
         if self._is_running():
@@ -480,8 +494,7 @@ class Plugin:
             raise RuntimeError("nmcli не найден, DNS нельзя переключить")
         self.dns = dns_proxy.DnsProxy(decky.logger)
         try:
-            await self.dns.start()
-            await asyncio.to_thread(self._nm_point_to_proxy)
+            await asyncio.gather(self.dns.start(), asyncio.to_thread(self._nm_point_to_proxy))
         except Exception:
             await self._dns_stop()
             raise
@@ -511,6 +524,22 @@ class Plugin:
     # ---------- API для frontend ----------
 
     async def get_state(self):
+        try:
+            return await self._get_state()
+        except Exception as e:
+            decky.logger.exception("get_state")
+            # отдаём UI хоть что-то, чтобы он показал ошибку, а не висел на «Загрузка…»
+            return {
+                "running": False, "enabled": False, "dns": False, "dns_running": False,
+                "dns_error": "", "autostart": False, "strategy": "", "strategies": [],
+                "lists": [], "auto_count": 0, "nfqws_installed": False, "firewall": None,
+                "error": f"{self.init_error or ''}\nget_state: {type(e).__name__}: {e}".strip(),
+                "data_dir": DATA_DIR,
+            }
+
+    async def _get_state(self):
+        if self.settings is None:
+            self._load_settings()
         if self.settings["enabled"] and self.proc is not None and not self._is_running():
             self.last_error = f"nfqws упал (код {self.proc.returncode}):\n{tail(LOG_FILE, 15)}"
             async with self.lock:
@@ -660,20 +689,47 @@ class Plugin:
     # ---------- жизненный цикл ----------
 
     async def _main(self):
+        decky.logger.info(f"Zapret Deck: старт, python {sys.version.split()[0]}, uid {os.getuid()}, "
+                          f"plugin_dir {PLUGIN_DIR}, data_dir {DATA_DIR}")
         self.lock = asyncio.Lock()
         self._load_settings()
-        self._seed_data_dir()
+        try:
+            self._seed_data_dir()
+        except Exception as e:
+            self.init_error = f"Не удалось подготовить {DATA_DIR}: {e}"
+            decky.logger.exception("seed")
+            return
+        decky.logger.info(f"Настройки: {self.settings}")
         if self.settings["autostart"]:
-            await asyncio.sleep(3)  # даём сети подняться после загрузки
+            jobs = []
             if self.settings["dns"]:
-                await self._apply_dns()
+                jobs.append(self._apply_dns())
             if self.settings["enabled"]:
-                await self._apply()
+                jobs.append(self._apply())
+            if jobs:
+                await self._wait_network()
+                t0 = asyncio.get_running_loop().time()
+                await asyncio.gather(*jobs)
+                decky.logger.info(f"Автозапуск занял {asyncio.get_running_loop().time() - t0:.2f} с")
         else:
             self.settings["enabled"] = False
             self.settings["dns"] = False
             self._save_settings()
         decky.logger.info("Zapret Deck загружен")
+
+    async def _wait_network(self, timeout: float = 15):
+        """После загрузки Deck ждём, пока NetworkManager поднимет сеть
+        (обычно это уже сделано, тогда ожидания нет)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            try:
+                res = await asyncio.to_thread(run, ["nmcli", "-t", "-f", "STATE", "general"], None, 3)
+                if res.stdout.strip().startswith("connected"):
+                    return
+            except Exception:
+                return
+            await asyncio.sleep(0.5)
 
     async def _unload(self):
         if self.lock:
@@ -686,3 +742,53 @@ class Plugin:
         await self._stop()
         await self._dns_stop()
         shutil.rmtree(RUN_DIR, ignore_errors=True)
+
+
+# Decky в зависимости от версии вызывает методы либо на экземпляре, либо на
+# самом классе (self = Plugin). Чтобы не зависеть от этого, вся логика живёт в
+# одном экземпляре ZapretDeck, а Plugin только пересылает вызовы.
+_impl = ZapretDeck()
+
+
+class Plugin:
+    async def get_state(self):
+        return await _impl.get_state()
+
+    async def set_enabled(self, enabled: bool):
+        return await _impl.set_enabled(enabled)
+
+    async def set_dns(self, enabled: bool):
+        return await _impl.set_dns(enabled)
+
+    async def set_strategy(self, strategy_id: str):
+        return await _impl.set_strategy(strategy_id)
+
+    async def set_list(self, list_id: str, enabled: bool):
+        return await _impl.set_list(list_id, enabled)
+
+    async def set_autostart(self, enabled: bool):
+        return await _impl.set_autostart(enabled)
+
+    async def restart(self):
+        return await _impl.restart()
+
+    async def clear_autohostlist(self):
+        return await _impl.clear_autohostlist()
+
+    async def get_log(self):
+        return await _impl.get_log()
+
+    async def check_url(self, url: str):
+        return await _impl.check_url(url)
+
+    async def install_nfqws(self):
+        return await _impl.install_nfqws()
+
+    async def _main(self):
+        return await _impl._main()
+
+    async def _unload(self):
+        return await _impl._unload()
+
+    async def _uninstall(self):
+        return await _impl._uninstall()

@@ -26,6 +26,7 @@ CA_FILES = [
 ]
 POOL_SIZE = 4
 TIMEOUT = 5
+CONNECT_TIMEOUT = 3
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -52,19 +53,32 @@ class _DotConn:
         self.reader = self.writer = None
 
     async def _connect(self):
-        last = None
-        for i in range(len(UPSTREAMS)):
-            idx = (self.upstream + i) % len(UPSTREAMS)
+        """Подключается ко всем DoT-серверам одновременно и берёт первый
+        ответивший: недоступный сервер не тормозит запуск."""
+        async def one(idx):
             host, sni = UPSTREAMS[idx]
-            try:
-                self.reader, self.writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, 853, ssl=self.ctx, server_hostname=sni),
-                    TIMEOUT,
-                )
-                self.upstream = idx
-                return
-            except Exception as e:
-                last = e
+            r, w = await asyncio.wait_for(
+                asyncio.open_connection(host, 853, ssl=self.ctx, server_hostname=sni), CONNECT_TIMEOUT
+            )
+            return idx, r, w
+
+        # сначала тот сервер, что работал в прошлый раз
+        order = [(self.upstream + i) % len(UPSTREAMS) for i in range(len(UPSTREAMS))]
+        tasks = [asyncio.ensure_future(one(i)) for i in order]
+        last = None
+        try:
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    self.upstream, self.reader, self.writer = await fut
+                    return
+                except Exception as e:
+                    last = e
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+                elif not t.cancelled() and t.exception() is None and t.result()[2] is not self.writer:
+                    t.result()[2].close()  # лишние успешные соединения закрываем
         raise ConnectionError(f"DoT недоступен: {last}")
 
     async def query(self, data: bytes) -> bytes:
